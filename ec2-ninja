@@ -241,7 +241,7 @@ if options.batch is not None and options.sleep is None:
 cache_dir = environ.get('XDG_CACHE_HOME', path.join(path.expanduser('~'), '.cache'))
 if not path.exists(cache_dir):
     makedirs(cache_dir)
-  
+
 if options.region:
     cache_file_list = path.join(cache_dir, 'ssh2_ninja_list_' + options.region)
     cache_file_num = path.join(cache_dir, 'ssh2_ninja_num_' + options.region)
@@ -300,6 +300,11 @@ if options.grep is not None:
             grepped_nodes_list[key]  = value
 else:
     grepped_nodes_list = nodes_list
+
+# exit if no results were found
+if len(grepped_nodes_list) == 0:
+    print "\nCould not find any instance that matches this search.\nPlease try again.\n"
+    exit()
 
 # print and ssh only if a command \ copy \ tunnel is not supplied
 if options.command is None and options.copy is None and options.remote is None:
