@@ -1,9 +1,7 @@
 #!/usr/bin/env python
 
-from optparse import OptionParser
 from time import sleep
 from threading import Thread
-from collections import OrderedDict
 from sys import stdout
 from os import system, path, environ, makedirs, listdir, remove
 from json import loads
@@ -12,23 +10,6 @@ from subprocess import Popen, PIPE
 from shlex import split
 from hashlib import md5
 from glob import glob
-
-
-# validate installed packages
-pip_installed = False
-try:
-    from pip import get_installed_distributions
-    pip_installed = True
-    installed_packages = get_installed_distributions()
-    packages = [package.project_name for package in installed_packages]
-except ImportError:
-    print "Warning - python-pip is not installed, please consider installing it"
-    packages = []
-
-prettytable_installed = False
-if "prettytable" in packages:
-    from prettytable import PrettyTable
-    prettytable_installed = True
 
 # This function changes the color of the prompt
 def change_prompt_color (which_color):
@@ -39,6 +20,10 @@ def change_prompt_color (which_color):
     elif which_color == 'normal':
         stdout.write("\033[0;0m")
 
+def print_in_color(color, message):
+    change_prompt_color(color)
+    print message
+    change_prompt_color('normal')
 
 # This function opens a thread with args
 def open_thread(thread_target,thread_args):
@@ -102,14 +87,15 @@ def run_batch(batch_group, command_to_execute):
     global processes
     commands_results = []
     processes = []
-    for host_ip in batch_group:
-        host_name = grepped_nodes_list.keys()[grepped_nodes_list.values().index(host_ip)] + ".ec2ssa.info"
+    for node in batch_group:
+        host_name = node[1]
+        host_ip = node[2]
         # check if a host place holder is in the command and replace
         command = command_to_execute
         if "<host_ip_place_holder>" in command:
             command = command_to_execute.replace("<host_ip_place_holder>", host_ip)
         if "<host_name_place_holder>" in command:
-            command = command.replace("<host_name_place_holder>", host_name.replace(".ec2ssa.info", ""))
+            command = command.replace("<host_name_place_holder>", host_name)
         open_thread(execute_command, (command, host_name, host_ip))
         #execute_command(command_to_execute, host_name, host_ip)
     for p in processes:
@@ -130,11 +116,9 @@ def print_batch_results(results):
         for line in command_output:
             print line
         if command_exit_code == 0:
-            change_prompt_color('green')
+            print_in_color('green', "command exit code: %s" % command_exit_code)
         else:
-            change_prompt_color('red')
-        print "command exit code: %s" % command_exit_code
-        change_prompt_color('normal')
+            print_in_color('red', "command exit code: %s" % command_exit_code)
 
 
 # This function prints a message
@@ -178,6 +162,24 @@ def extract_name(instance):
     return 'unknown_name'
 
 
+# validate installed packages
+pip_installed = False
+try:
+    from pip import get_installed_distributions
+    pip_installed = True
+    installed_packages = get_installed_distributions()
+    packages = [package.project_name for package in installed_packages]
+except ImportError:
+    errorAndExit("python-pip is not installed, please install it before using this tool!")
+
+prettytable_installed = False
+if "prettytable" in packages:
+    from prettytable import PrettyTable
+    prettytable_installed = True
+else:
+    errorAndExit("you must install prettytable - please run 'sudo pip install prettytable' and try again.")
+
+
 usage = "usage: %prog [options] [server_number]\n\
   server_number: a numeric value corresponding to the server number\n\
   e.g.: '%prog 1' will ssh into the 1st server in the list."
@@ -200,7 +202,6 @@ parser.add_option("--dest-remote", action="store", dest="remote_dest", help="pat
 parser.add_option("--tunnel", action="store", dest="tunnel", help="ssh tunnel to the instance - provide as <local-port>:<remote-port> or <local-port> only for the same port")
 parser.add_option("--ip-type", action="store", dest="iptype", choices=['lan', 'wan'], default="wan", help="choose between lan and wan address (wan is the default)")
 parser.add_option("-l", "--list", action="store_true",  help="show only list (without ssh to instance)")
-parser.add_option("--pretty", action="store_true", help="print in table format (requires prettytable install with pip)")
 
 (options, args) = parser.parse_args()
 
@@ -210,9 +211,6 @@ if options.user is None:
 
 
 # check that prettytable is installed if the -p option was provided
-if not prettytable_installed and options.pretty:
-    errorAndExit("You can't use the pretty print option, since you don't have the prettytable package installed.\n"
-                 "please run 'sudo pip install prettytable' and try again.")
 if options.command is not None:
     if options.dest is not None or options.copy is not None:
         errorAndExit("You can't use the exec / sleep option with the copy /dest option!")
@@ -243,11 +241,11 @@ if not path.exists(cache_dir):
     makedirs(cache_dir)
 
 if options.region:
-    cache_file_list = path.join(cache_dir, 'ssh2_ninja_list_' + options.region)
-    cache_file_num = path.join(cache_dir, 'ssh2_ninja_num_' + options.region)
+    cache_file_list = path.join(cache_dir, 'ec2_ninja_list_' + options.region)
+    cache_file_num = path.join(cache_dir, 'ec2_ninja_num_' + options.region)
 else:
-    cache_file_list = path.join(cache_dir, 'ssh2_ninja_list')
-    cache_file_num = path.join(cache_dir, 'ssh2_ninja_num')
+    cache_file_list = path.join(cache_dir, 'ec2_ninja_list')
+    cache_file_num = path.join(cache_dir, 'ec2_ninja_num')
 
 
 if options.bust_cache or not path.exists(cache_file_list) or options.profile:
@@ -280,24 +278,24 @@ if not parsed['Reservations']:
         remove(cache_file_list)
     exit()
 
-nodes_list = {}
+nodes_list = []
 for instances in parsed['Reservations']:
     for instance in instances['Instances']:
         if instance['State']['Name'] == 'running':
             if options.iptype == "wan":
                 if 'PublicIpAddress' in instance:
-                    nodes_list[extract_name(instance)] = instance['PublicIpAddress']
+                    nodes_list.append([instance['InstanceId'], extract_name(instance), instance['PublicIpAddress'], instance['InstanceType'], instance['ImageId'], instance['KeyName']])
                 else:
-                    nodes_list[extract_name(instance)] = instance['PrivateIpAddress']
+                    nodes_list.append([instance['InstanceId'], extract_name(instance), instance['PrivateIpAddress'],instance['InstanceType'], instance['ImageId'], instance['KeyName']])
             else:
-                nodes_list[extract_name(instance)] = instance['PrivateIpAddress']
+                nodes_list.append([instance['InstanceId'], extract_name(instance), instance['PrivateIpAddress'], instance['InstanceType'], instance['ImageId'], instance['KeyName']])
 
 
-grepped_nodes_list = {}
+grepped_nodes_list = []
 if options.grep is not None:
-    for key, value in nodes_list.iteritems():
-        if options.grep in key:
-            grepped_nodes_list[key]  = value
+    for node in nodes_list:
+        if options.grep in node[1]:
+            grepped_nodes_list.append(node)
 else:
     grepped_nodes_list = nodes_list
 
@@ -310,27 +308,17 @@ if len(grepped_nodes_list) == 0:
 if options.command is None and options.copy is None and options.remote is None:
     # sort and print the nodes
     try:
-        sorted_inst = OrderedDict(sorted(grepped_nodes_list.items()))
-        if options.pretty:
-            table = PrettyTable(['#', 'Name', 'IP'])
-            table.align = "l"
-            table.border = True
-        else:
-            max_len = 0
-            for key, value in sorted_inst.iteritems():
-                if len(key) > max_len:
-                    max_len = len(key)
+        # sorted_inst = OrderedDict(sorted(grepped_nodes_list.items()))
+        table = PrettyTable(['#', 'ID', 'Name', 'IP','Type', 'AMI', 'Key'])
+        table.align = "l"
+        table.border = True
         print_main_message("Servers list:")
         i = 1
-        for key, value in sorted_inst.iteritems():
-            choice = '[%d]' % i
+        for node in grepped_nodes_list:
+            num = '[%d]' % i
             i += 1
-            if options.pretty:
-                table.add_row([choice, key + '.ec2ssa.info', value])
-            else:
-                print '%-5s %s %s' % (choice, key + '.ec2ssa.info ' + ((max_len + 4) - len(key)) * '.', value)
-        if options.pretty:
-            print table
+            table.add_row([num, node[0], node[1], node[2], node[3], node[4], node[5]])
+        print table
     except Exception as e:
         errorAndExit(e)
 
@@ -340,17 +328,16 @@ if options.command is None and options.copy is None and options.remote is None:
         exit()
     # ask the user to choose which instance to connect to
     num = get_user_choice(1, 1, i, "Which server would you like to connect to ")
-
     # ssh to instance - in case the user flag is triggered, use a different user name
-    node_name = list(sorted_inst)[num - 1]
-    node_ip = sorted_inst[node_name]
+    node_name = grepped_nodes_list[num - 1][1]
+    node_ip = grepped_nodes_list[num - 1][2]
     # check if the tunnel option was supplied
     if options.tunnel is None:
         print "\nConnecting to %s (%s)" % (node_name, node_ip)
         identity = ''
         if options.identity and path.exists(options.identity):
             identity = "-i %s " % options.identity
-        system('ssh -o ConnectTimeout=%s %s %s@%s' % (ssh_connection_timeout,identity, options.user, node_ip))
+        system('ssh -o ConnectTimeout=%s %s %s@%s' % (ssh_connection_timeout, identity, options.user, node_ip))
     else:
         # open a tunnel connection and hold it until ctrl + c is given
         local_port = options.tunnel
@@ -383,23 +370,17 @@ if options.command is None and options.copy is None and options.remote is None:
 
 else:
     # not an ssh request, need to execute a command or copy file
-    ip_list = []
-    # get a list of all nodes to run ssh / copy
-    for val in grepped_nodes_list.values():
-        ip_list.append(val)
-
     command_batch_size = 10
     commands_results = []
-    groups = split_to_chunks(ip_list, command_batch_size)
+    groups = split_to_chunks(grepped_nodes_list, command_batch_size)
     last_group = groups[-1]
 
     # copy files - first upload to home directory, then copy the file from home to destination
     if options.copy is not None and options.dest is not None:
-
         print_main_message("Found %s instances that matches this request.\n"
                   "Going to upload the file to %s's home directory first, and then copy to %s\n"
                   "This may take some time, depending on the number of instances..."
-                  % (len(ip_list), options.user, options.dest))
+                  % (len(grepped_nodes_list), options.user, options.dest))
         # copy the file to home in batches
         copy_to_home_command = "scp -o ConnectTimeout=%s %s %s@<host_ip_place_holder>:~"\
                                % (ssh_connection_timeout, options.copy, options.user)
@@ -429,7 +410,7 @@ else:
         print_main_message("Found %s instances that matches this request.\n"
                "Executing command `%s` on all instances.\n"
                 "this may take some time, depending on the number of instances.."
-                % (len(ip_list), options.command))
+                % (len(grepped_nodes_list), options.command))
         ssh_command = "ssh -o ConnectTimeout=%s %s@<host_ip_place_holder> '%s'" \
                       % (ssh_connection_timeout, options.user, options.command)
         # if the sleep options was supplied, changed the batch size to 1
@@ -438,7 +419,7 @@ else:
                 command_batch_size = options.batch
             else:
                 command_batch_size = 1
-            groups = split_to_chunks(ip_list, command_batch_size)
+            groups = split_to_chunks(grepped_nodes_list, command_batch_size)
             last_group = groups[-1]
         execute_in_batches(groups, ssh_command)
         print_main_message("Done running %s to all nodes!" % (options.command))
@@ -450,7 +431,7 @@ else:
         print_main_message("Found %s instances that matches this request.\n"
                            "copying file '%s' from all instances to path %s.\n"
                            "this may take some time, depending on the number of instances.."
-                           % (len(ip_list), options.remote, options.remote_dest))
+                           % (len(grepped_nodes_list), options.remote, options.remote_dest))
         copy_to_tmp_remote = "scp -o ConnectTimeout=%s %s@<host_ip_place_holder>:%s %s/<host_name_place_holder>-%s" \
                                % (ssh_connection_timeout, options.user, options.remote, options.remote_dest, path.basename(options.remote))
         if path.isfile(options.remote_dest):
@@ -489,4 +470,4 @@ else:
                     if md5_res in check:
                         print check
         else:
-            print "All files appear to be the same - hurray!"
+            print "All files appear to be the same - hurray!\n"
