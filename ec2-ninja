@@ -10,6 +10,10 @@ from subprocess import Popen, PIPE
 from shlex import split
 from hashlib import md5
 from glob import glob
+import platform
+from commands import getoutput
+from distutils.version import StrictVersion
+from distutils.spawn import find_executable
 
 # This function changes the color of the prompt
 def change_prompt_color (which_color):
@@ -160,6 +164,32 @@ def extract_name(instance):
             if tag['Key'] == 'Name' and tag['Value']:
                 return tag['Value']
     return 'unknown_name'
+
+# This function copy a file for windows users / hosts with rsync version lower than 3.1.0 and owner flag
+def copy_to_home_and_move(hosts_list, ssh_connection_timeout, groups_to_execute, copy_file_basename, dest_file_name):
+    print_main_message("Found %s instances that matches this request.\n"
+                       "Going to upload the file to %s's home directory first, and then copy to %s\n"
+                       "This may take some time, depending on the number of instances..."
+                       % (len(hosts_list), options.user, options.dest))
+    # need to copy the file to home in batches and then move it to the required folder
+    copy_to_home_command = "scp -o ConnectTimeout=%s %s %s@<host_ip_place_holder>:~" \
+                           % (ssh_connection_timeout, options.copy, options.user)
+    execute_in_batches(groups_to_execute, copy_to_home_command)
+    print_main_message("Done uploading %s to home directory, going to copy to %s"
+                       % (options.copy, options.dest))
+    # if option owner was supplied, need to add a chown command to the copy command
+    tmp_cp_command = "sudo mv %s %s" % (copy_file_basename, dest_file_name)
+    if options.owner is not None:
+        # if only user supplied as owner (with no group), chain the same group
+        if not ":" in options.owner:
+            options.owner = "%s:%s" % (options.owner, options.owner)
+        chown_command = "sudo chown %s %s" % (options.owner, dest_file_name)
+        tmp_cp_command = "%s; %s" % (tmp_cp_command, chown_command)
+    copy_command = "ssh -o ConnectTimeout=%s %s@<host_ip_place_holder> '%s'" \
+                   % (ssh_connection_timeout, options.user, tmp_cp_command)
+    # run copy command
+    execute_in_batches(groups, copy_command)
+
 
 
 # validate installed packages
@@ -375,35 +405,66 @@ else:
     groups = split_to_chunks(grepped_nodes_list, command_batch_size)
     last_group = groups[-1]
 
-    # copy files - first upload to home directory, then copy the file from home to destination
+    # copy files
     if options.copy is not None and options.dest is not None:
-        print_main_message("Found %s instances that matches this request.\n"
-                  "Going to upload the file to %s's home directory first, and then copy to %s\n"
-                  "This may take some time, depending on the number of instances..."
-                  % (len(grepped_nodes_list), options.user, options.dest))
-        # copy the file to home in batches
-        copy_to_home_command = "scp -o ConnectTimeout=%s %s %s@<host_ip_place_holder>:~"\
-                               % (ssh_connection_timeout, options.copy, options.user)
-        execute_in_batches(groups, copy_to_home_command)
-        print_main_message("Done uploading %s to home directory, going to copy to %s"
-                           % (options.copy, options.dest))
-        # if option owner was supplied, need to add a chown command
         copy_file_basename = path.basename(options.copy)
         if path.isdir(options.dest):
             dest_file_name = "%s/%s" % (options.dest, copy_file_basename)
         else:
-            dest_file_name = "%s/%s" %(path.dirname(options.dest), path.basename(options.dest))
-        tmp_cp_command = "sudo mv %s %s" % (copy_file_basename, dest_file_name)
-        if options.owner is not None:
-            # if only user supplied as owner (with no group), chain the same group
-            if not ":" in options.owner:
-                options.owner = "%s:%s" % (options.owner, options.owner)
-            chown_command = "sudo chown %s %s" % (options.owner, dest_file_name)
-            tmp_cp_command = "%s; %s" %(tmp_cp_command, chown_command)
-        copy_command = "ssh -o ConnectTimeout=%s %s@<host_ip_place_holder> '%s'" \
-                       % (ssh_connection_timeout, options.user, tmp_cp_command)
-        execute_in_batches(groups, copy_command)
-        print_main_message("Done copying %s to all nodes!\n" % (options.copy))
+            dest_file_name = "%s/%s" % (path.dirname(options.dest), path.basename(options.dest))
+
+        # check if the user is using windows or mac / linux
+        # in case of windows, copy the file to the user's home directory, and them move dest
+        if platform.system() == "Windows":
+            copy_to_home_and_move(grepped_nodes_list, ssh_connection_timeout, groups, copy_file_basename, dest_file_name)
+        else:
+            # if mac / linux, need to check the rsync version, since only rsync 3.1 + support changing the owner
+            if options.owner is None:
+                # just copy, no need to change the owner
+                copy_command = "rsync -aHWvzxe ssh --rsync-path='sudo rsync' %s %s@<host_ip_place_holder>:%s" % (
+                options.copy, options.user, dest_file_name)
+                print_main_message("Found %s instances that matches this request.\n"
+                                   "Copying from %s to %s\n"
+                                   "This may take some time, depending on the number of instances..."
+                                   % (len(grepped_nodes_list), options.copy, options.dest))
+                execute_in_batches(groups, copy_command)
+            else:
+                # check if brew is installed version 3.1 + for rsync
+                already_copied = False
+                brew = find_executable('brew')
+                if brew is None:
+                    if "Darwin" in platform.platform():
+                        errorAndExit("\nYou must install brew in order to use the copy command!\n"
+                              "Please run the following command - \n"
+                              "/usr/bin/ruby -e \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)\"")
+                else:
+                    # check rsync version
+                    rsync_ver = getoutput("rsync --version | grep version")
+                    rsync_ver = rsync_ver[rsync_ver.index("version") + 7:].strip()[:5]
+                    if StrictVersion(rsync_ver) < StrictVersion("3.1.0"):
+                        if "Darwin" in platform.platform():
+                            errorAndExit("\nYou need to upgrade the rsync version on your localhost before using the --owner flag.\n"
+                                  "Mac users - please run the following commands - \n"
+                                  "$> brew tap homebrew/dupes\n"
+                                  "$> brew install rsync")
+                        else:
+                            copy_to_home_and_move(grepped_nodes_list, ssh_connection_timeout, groups, copy_file_basename, dest_file_name)
+                            already_copied = True
+                    else:
+                        if not ":" in options.owner:
+                            options.owner = "%s:%s" % (options.owner, options.owner)
+                        copy_command = "rsync -aHWvzxe ssh --rsync-path='sudo rsync' --chown=%s %s %s@<host_ip_place_holder>:%s" % (
+                        options.owner, options.copy, options.user, dest_file_name)
+
+                # run copy command (if not copied already)
+                if not already_copied:
+                    print_main_message("Found %s instances that matches this request.\n"
+                                       "Copying from %s to %s\n"
+                                       "This may take some time, depending on the number of instances..."
+                                       % (len(grepped_nodes_list), options.copy, options.dest))
+                    execute_in_batches(groups, copy_command)
+
+
 
     # run command in parallel or with sleep
     if options.command:
@@ -432,8 +493,14 @@ else:
                            "copying file '%s' from all instances to path %s.\n"
                            "this may take some time, depending on the number of instances.."
                            % (len(grepped_nodes_list), options.remote, options.remote_dest))
-        copy_to_tmp_remote = "scp -o ConnectTimeout=%s %s@<host_ip_place_holder>:%s %s/<host_name_place_holder>-%s" \
-                               % (ssh_connection_timeout, options.user, options.remote, options.remote_dest, path.basename(options.remote))
+
+        if platform.system() == "Windows":
+            copy_to_tmp_remote = "scp -o ConnectTimeout=%s %s@<host_ip_place_holder>:%s %s/<host_name_place_holder>-%s" \
+                                   % (ssh_connection_timeout, options.user, options.remote, options.remote_dest, path.basename(options.remote))
+        else:
+            copy_to_tmp_remote = "rsync -aHWvzxe ssh --rsync-path='sudo rsync' %s@<host_ip_place_holder>:%s %s/<host_name_place_holder>-%s" % \
+                                 (options.user, options.remote, options.remote_dest, path.basename(options.remote))
+
         if path.isfile(options.remote_dest):
             errorAndExit("%s exists as a file - cannot copy files into it!" % options.remote_dest)
         if not path.isdir(options.remote_dest):
