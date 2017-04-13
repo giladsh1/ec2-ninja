@@ -1,9 +1,20 @@
 # ec2-ninja
-Forked from [ssh2](https://github.com/soheil/ssh2), ec2-ninja is is an interactive command line tool which allows you to to control your EC2 instances.
-in additional to ssh capabilities, ec2-ninja allows you to run ssh commands, copy file to \ from ec2 instances, open ssh-tunnel connection and more.
+Forked from [ssh2](https://github.com/soheil/ssh2), ec2-ninja is an interactive command line tool which allows you to to control your EC2 instances.
+
+in additional to ssh capabilities, ec2-ninja allows you to :
+* run ssh commands
+* copy file to ec2 instances
+* copy files from ec2 instances and compare (md5 check)
+* open ssh-tunnel
+
+## Requirements
+* [AWS CLI](https://aws.amazon.com/cli/)
+* Python
+* Python pip
+* Python package prettytable (quick install with pip install -r requirements.txt in the main folder)
 
 ## usage
-ec2-ninja has the following flags - 
+ec2-ninja has the following flags -
 
 ```
 Options:
@@ -25,22 +36,27 @@ Options:
   --tunnel=TUNNEL:                    ssh tunnel to the instance - provide as <local-port>:<remote-port> or <local-port> only for the same port
   --ip-type=IPTYPE:                   choose between lan and wan address (wan is the default)
   -l, --list:                         show only list (without ssh to instance)
-  --pretty:                           print in table format (requires prettytable install with pip)
 ```
 
 ## example usage
 
+#### list instances with lan IP:
+![](docs/lan_ip.png)
 
-## Requirements
-* [AWS CLI](https://aws.amazon.com/cli/)
-* Python
+#### execute command on remote hosts:
+![](docs/execute_command.png)
+
+#### copy a file to remote hosts:
+![](docs/copy_file.png)
+
+#### copy from remote hosts and compare:
+![](docs/copy_from_remote.png)
+
+#### open ssh-tunnel connection (port forwarding):
+![](docs/ssh-tunnel.png)
+
 
 ## Installation
-```
-pip install ec2-ninja
-```
-
-### without using Python package manager:
 ```
 git clone https://github.com/giladsh1/ec2-ninja.git
 cd ec2-ninja
