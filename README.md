@@ -40,19 +40,19 @@ Options:
 
 ## example usage
 
-#### list instances with lan IP:
+### list ec2 instances with lan IP:
 ![](docs/lan_ip.png)
 
-#### execute command on remote hosts:
+### execute a command on remote hosts:
 ![](docs/execute_command.png)
 
-#### copy a file to remote hosts:
+### copy a file to remote hosts:
 ![](docs/copy_file.png)
 
-#### copy from remote hosts and compare:
+### copy from remote hosts and compare:
 ![](docs/copy_from_remote.png)
 
-#### open ssh-tunnel connection (port forwarding):
+### open ssh-tunnel connection (port forwarding):
 ![](docs/ssh-tunnel.png)
 
 
