@@ -272,7 +272,7 @@ if "prettytable" in packages:
     from prettytable import PrettyTable
     prettytable_installed = True
 else:
-    error_and_exit("you must install prettytable - please run 'sudo pip install prettytable' and try again.")
+    error_and_exit("you must install prettytable - please run 'pip install prettytable' and try again.")
 
 # check yaml package for config file
 yaml_installed = False
@@ -282,6 +282,16 @@ if "PyYAML" in packages:
         yaml_installed = True
     except:
         pass
+
+# check yaml package for config file
+boto_installed = False
+if "boto3" in packages:
+    try:
+        from boto3 import session
+        boto_installed = True
+    except:
+        pass
+
 
 # global vars
 conf_file_name = '.ec2-ninja.yaml'
@@ -299,6 +309,7 @@ parser.add_option("-u", "--user", action="store", dest="user", help="provide use
 parser.add_option("-i", "--identity", action="store", dest="identity", default="", help="provide identity file")
 parser.add_option("-p", "--profile", action="store", dest="profile", default="", help="provide AWS profile")
 parser.add_option("-r", "--region", action="store", dest="region", default="", help="provide AWS region")
+parser.add_option("-b", "--bastion", action="store_true", dest="bastion", default="", help="use a predefined bastion host from conf file")
 parser.add_option("-g", "--grep", type="string", action="callback", callback=parser_split, dest="grep", help="filter the servers list")
 parser.add_option("--ungrep", type="string", action="callback", callback=parser_split, dest="ungrep", help="ungrep - exclude from servers list")
 parser.add_option("--split", action="store_true", dest="split", help="open shell panes for each node found - up to %s" % max_panes_allowed)
@@ -321,7 +332,7 @@ options, _ = parser.parse_args()
 if path.isfile(conf_file_path):
     if not yaml_installed:
         print_main_message("Warning - found %s file, but the PyYAML package is not installed.\n" \
-              "you must run 'sudo pip install pyyaml' in order to use this file!" % conf_file_name)
+              "you must run 'pip install pyyaml' in order to use this file!" % conf_file_name)
     else:
         conf = None
         try:
@@ -343,6 +354,25 @@ if path.isfile(conf_file_path):
                     options.bust_cache = True
                 else:
                     options.bust_cache = False
+            if 'bastion_hosts' in conf:
+                # allow auto connection with bastion host when environment is set in conf
+                if 'use_for_profiles' in conf['bastion_hosts'] and options.profile in conf['bastion_hosts']['use_for_profiles']:
+                    options.bastion = True
+                if options.bastion:
+                    try:
+                        if not boto_installed:
+                            error_and_exit("You must install boto3 in order to use this feature\n"
+                                           "Please run 'pip install boto3'")
+                        if not options.region:
+                            if not options.profile:
+                                options.profile = 'default'
+                            options.region = session.Session(profile_name=options.profile).region_name
+                        bation_host_ip = conf['bastion_hosts'][options.region]['ip']
+                        bation_host_user = conf['bastion_hosts'][options.region]['user']
+                        ssh_base_command = "%s -J %s@%s" % (ssh_base_command, bation_host_user, bation_host_ip)
+                    except Exception as e:
+                        error_and_exit("Could not find a bastion conf for region: %s" % options.region)
+
 
 # set default user to USER in case no option is set or default in conf
 if options.user is None:
@@ -459,7 +489,7 @@ if options.command is None and options.copy is None and options.remote is None:
         check_brew_installation()
         if not yaml_installed:
             error_and_exit("You must install the PyYAML package in order to use this feature!\n"
-                         "Please run 'sudo pip install pyyaml' and try again.\n")
+                         "Please run 'pip install pyyaml' and try again.\n")
         itermocil = find_executable('itermocil')
         if itermocil is None:
             error_and_exit("You must install itermocil in order to use this feature\n"
