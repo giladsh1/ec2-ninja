@@ -611,8 +611,8 @@ else:
             copy_to_tmp_remote = "scp -o ConnectTimeout=%s %s@<host_ip_place_holder>:%s %s/<host_name_place_holder>-%s" \
                                    % (ssh_connection_timeout, options.user, options.remote, options.remote_dest, path.basename(options.remote))
         else:
-            copy_to_tmp_remote = "rsync -aHWvzxe ssh --rsync-path='sudo rsync' %s@<host_ip_place_holder>:%s %s/<host_name_place_holder>-%s" % \
-                                 (options.user, options.remote, options.remote_dest, path.basename(options.remote))
+            copy_to_tmp_remote = "rsync -aHWvzxe ssh --timeout=%s --rsync-path='sudo rsync' %s@<host_ip_place_holder>:%s %s/<host_name_place_holder>-%s" % \
+                                 (ssh_connection_timeout, options.user, options.remote, options.remote_dest, path.basename(options.remote))
 
         if path.isfile(options.remote_dest):
             error_and_exit("%s exists as a file - cannot copy files into it!" % options.remote_dest)
@@ -620,7 +620,7 @@ else:
             makedirs(options.remote_dest)
         # check if the tmp folder is not empty, and ask the user if he wants to delete the data in there
         if not listdir(options.remote_dest) == []:
-            ans = raw_input("The folder %s is not empty, would you like to delete files in it? [y/n] " % (options.remote_dest))
+            ans = raw_input("The folder %s is not empty!\nwould you like to delete the files in that folder? [y/n] " % (options.remote_dest))
             if ans.lower() != "y" and ans.lower() != "n":
                 error_and_exit("wrong answer!")
             if ans.lower() == "y":
@@ -642,12 +642,12 @@ else:
                     all_md5.append(md5(data).hexdigest())
         # if more than one md5 was found, print error, else print OK
         if len(all_md5) > 1:
-            print "Found changes, here is a the full file list with their md5 check:"
-            print "=" * 66
+            print_main_message("Found md5 changes, please review the following:")
             for md5_res in all_md5:
                 print "\n============ md5: %s ============" % md5_res
                 for check in files_md5_check:
                     if md5_res in check:
                         print check
+            print "\n\n"
         else:
-            print "All files appear to be the same - hurray!\n"
+            print_main_message("No diff was found - all files has the same md5 hash!")
