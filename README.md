@@ -1,5 +1,5 @@
 # ec2-ninja
-Forked from [ssh2](https://github.com/soheil/ssh2), ec2-ninja is an interactive command line tool which allows you to to control your EC2 instances.
+Forked from [ssh2](https://github.com/soheil/ssh2), ec2-ninja is an interactive command line tool which allows you to control your EC2 instances.
 
 in additional to ssh capabilities, ec2-ninja allows you to :
 * run ssh commands
