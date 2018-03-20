@@ -11,7 +11,7 @@ in additional to ssh capabilities, ec2-ninja allows you to :
 * [AWS CLI](https://aws.amazon.com/cli/)
 * Python
 * Python pip
-* Python package prettytable (quick install with pip install -r requirements.txt in the main folder)
+* pip packages (prettytable, PyYAML, boto3) - install with pip install -r requirements.txt
 
 ## usage
 ec2-ninja has the following flags -
@@ -24,9 +24,14 @@ Options:
   -i IDENTITY, --identity=IDENTITY:   provide identity file
   -p PROFILE, --profile=PROFILE:      provide AWS profile
   -r REGION, --region=REGION:         provide AWS region
+  -b, --bastion                       use a predefined bastion host from conf file
   -g GREP, --grep=GREP:               filter the server list
+  --ungrep=UNGREP:                    ungrep - exclude from servers list
+  --split:                            open shell panes for each node found - up to 15
+  --limit=LIMIT:                      limit the number of panes to open
   -e COMMAND, --exec=COMMAND:         run a single command
-  -t SLEEP, --sleep=SLEEP:            sleep between ssh runs, cancel parallel run
+  -s SLEEP, --sleep=SLEEP:            sleep between ssh runs, cancel parallel run
+  --exit-status=EXIT_CODE:            filter exec exit code outcome - supply 'passed' or 'failed'
   --batch-size=BATCH:                 batch size to run - this is relevant when a sleep is supplied
   --copy=COPY:                        copy a file to remote host, must be supplied with --dest option
   --dest=DEST:                        destination for file copy, must be supplied with the --copy option
@@ -55,7 +60,28 @@ Options:
 ### open ssh-tunnel connection (port forwarding):
 ![](docs/ssh-tunnel.png)
 
+## config file
+ec2-ninja also suuport a config file, which can hold default values.  
+the file must be saved as ~/.ec2-ninja.yaml.  
+the following options are valid - 
 
+```
+default_user: spiritus # use as default user
+default_ip_type: lan # use as default ip type for ssh / scp
+ignore_cache: yes # always refresh from aws, don't use local cache file
+# define bastion hosts
+bastion_hosts:
+  # list of porfiles for auto using bastion
+  use_for_profiles:
+    - prod
+  # define aws regions and their bastion host ip + user name
+  us-east-1:
+    ip: <bastion-ip>
+    user: <bastion-user>
+  eu-central-1:
+    ip: <bastion-ip>
+    user: <bastion-user>
+```
 ## Installation
 ```
 git clone https://github.com/giladsh1/ec2-ninja.git

@@ -7,40 +7,42 @@ from os import system, path, environ, makedirs, listdir, remove
 from json import loads
 from optparse import OptionParser
 from subprocess import Popen, PIPE
-from shlex import split
+from shlex import split as shlex_split
 from hashlib import md5
 from glob import glob
 import platform
-from commands import getoutput
-from distutils.version import StrictVersion
 from distutils.spawn import find_executable
+from types import BooleanType
+
 
 # This function changes the color of the prompt
-def change_prompt_color (which_color):
-    if which_color == 'red':
+def change_prompt_color(color):
+    if color == 'red':
         stdout.write("\033[1;31m")
-    elif which_color == 'green':
+    elif color == 'green':
         stdout.write("\033[0;32m")
-    elif which_color == 'normal':
+    elif color == 'normal':
         stdout.write("\033[0;0m")
 
+# This function prints in color and returns to normal when done
 def print_in_color(color, message):
     change_prompt_color(color)
     print message
     change_prompt_color('normal')
 
+
 # This function opens a thread with args
-def open_thread(thread_target,thread_args):
+def open_thread(thread_target, thread_args):
     t = Thread(target=thread_target, args = (thread_args))
     t.daemon = True
     t.start()
     processes.append(t)
 
 
-def errorAndExit(exception_message):
-    # This function prints an error and exits
-    print "ERROR - %s" %(exception_message)
-    exit()
+# This function prints an error and exits
+def error_and_exit(exception_message):
+    print "\nERROR - %s\n" %(exception_message)
+    exit(1)
 
 
 # This function splits a list to chunks for batch runs
@@ -55,7 +57,7 @@ def split_to_chunks(list_to_split, num):
 def execute_command(command_to_execute, host_name, host_ip):
     global commands_results
     try:
-        command_args = split(command_to_execute)
+        command_args = shlex_split(command_to_execute)
         ssh_execute = Popen(command_args,
                             shell=False,
                             stdout=PIPE,
@@ -91,9 +93,9 @@ def run_batch(batch_group, command_to_execute):
     global processes
     commands_results = []
     processes = []
-    for node in batch_group:
-        host_name = node[1]
-        host_ip = node[2]
+    for batch_node in batch_group:
+        host_name = batch_node[1]
+        host_ip = batch_node[2]
         # check if a host place holder is in the command and replace
         command = command_to_execute
         if "<host_ip_place_holder>" in command:
@@ -101,28 +103,42 @@ def run_batch(batch_group, command_to_execute):
         if "<host_name_place_holder>" in command:
             command = command.replace("<host_name_place_holder>", host_name)
         open_thread(execute_command, (command, host_name, host_ip))
-        #execute_command(command_to_execute, host_name, host_ip)
-    for p in processes:
-        p.join()
+    for process in processes:
+        process.join()
+
+
+# this function prints a node result and exit code
+def print_node_result(node_name, node_ip, exit_code, command_output):
+    node_len = len(node_name) + len(node_ip) + 9
+    print "\n" + ("=" * node_len)
+    print "host: %s (%s)" % (node_name, node_ip)
+    print "=" * node_len
+    for line in command_output:
+        print line
+    if exit_code == 0 or exit_code == 'passed':
+        print_in_color('green', "command exit code: %s" % exit_code)
+    else:
+        print_in_color('red', "command exit code: %s" % exit_code)
 
 
 # This function prints the result from the run_batch function
 def print_batch_results(results):
     for result in results:
-        command_exit_code = result[0]
+        exit_code = result[0]
         command_output = result[1]
-        host_name = result[2]
-        host_ip = result[3]
-        host_len = len(host_name) + len(host_ip) + 9
-        print "\n" + ("=" * host_len)
-        print "host: %s (%s)" % (host_name, host_ip)
-        print "=" * host_len
-        for line in command_output:
-            print line
-        if command_exit_code == 0:
-            print_in_color('green', "command exit code: %s" % command_exit_code)
+        node_name = result[2]
+        node_ip = result[3]
+        # check if exit code filter was supplied and print accordingly
+        if options.exit_code is None:
+            print_node_result(node_name, node_ip, exit_code, command_output)
         else:
-            print_in_color('red', "command exit code: %s" % command_exit_code)
+            # only print if the filter matches the required state
+            if exit_code == 0:
+                if options.exit_code == 'passed' or options.exit_code == '0':
+                    print_node_result(node_name, node_ip, exit_code, command_output)
+            else:
+                if options.exit_code == 'failed' or options.exit_code == '1':
+                    print_node_result(node_name, node_ip, exit_code, command_output)
 
 
 # This function prints a message
@@ -132,6 +148,8 @@ def print_main_message(msg):
     for line in all_lines:
         if len(line.strip()) > longest_line:
             longest_line = len(line.strip())
+    if longest_line > 180:
+        longest_line = 180
     padding = 8
     print "\n" + ("#" * (longest_line + padding))
     for line in msg.splitlines():
@@ -157,6 +175,7 @@ def get_user_choice(default_num, min_num, max_num, question):
             print "\nExiting..."
             exit()
 
+
 # This function extracts the name of the instance from aws tags
 def extract_name(instance):
     if 'Tags' in instance:
@@ -165,31 +184,50 @@ def extract_name(instance):
                 return tag['Value']
     return 'unknown_name'
 
-# This function copy a file for windows users / hosts with rsync version lower than 3.1.0 and owner flag
-def copy_to_home_and_move(hosts_list, ssh_connection_timeout, groups_to_execute, copy_file_basename, dest_file_name):
-    print_main_message("Found %s instances that matches this request.\n"
-                       "Going to upload the file to %s's home directory first, and then copy to %s\n"
-                       "This may take some time, depending on the number of instances..."
-                       % (len(hosts_list), options.user, options.dest))
-    # need to copy the file to home in batches and then move it to the required folder
-    copy_to_home_command = "scp -o ConnectTimeout=%s %s %s@<host_ip_place_holder>:~" \
-                           % (ssh_connection_timeout, options.copy, options.user)
-    execute_in_batches(groups_to_execute, copy_to_home_command)
-    print_main_message("Done uploading %s to home directory, going to copy to %s"
-                       % (options.copy, options.dest))
-    # if option owner was supplied, need to add a chown command to the copy command
-    tmp_cp_command = "sudo mv %s %s" % (copy_file_basename, dest_file_name)
-    if options.owner is not None:
-        # if only user supplied as owner (with no group), chain the same group
-        if not ":" in options.owner:
-            options.owner = "%s:%s" % (options.owner, options.owner)
-        chown_command = "sudo chown %s %s" % (options.owner, dest_file_name)
-        tmp_cp_command = "%s; %s" % (tmp_cp_command, chown_command)
-    copy_command = "ssh -o ConnectTimeout=%s %s@<host_ip_place_holder> '%s'" \
-                   % (ssh_connection_timeout, options.user, tmp_cp_command)
-    # run copy command
-    execute_in_batches(groups, copy_command)
 
+# This function return an IP address from the instance
+def extract_ip(instance_obj):
+    public_ip_field = 'PublicIpAddress'
+    private_ip_field = 'PrivateIpAddress'
+    if options.iptype == "wan":
+        if public_ip_field in instance_obj:
+            return instance_obj[public_ip_field]
+        else:
+            return instance_obj[private_ip_field]
+    return instance_obj[private_ip_field]
+
+
+# This function returns a field from the instance or n/a if it's not available
+def extract_data_or_return_na(instance_obj, field):
+    if field in instance_obj:
+        return instance_obj[field]
+    else:
+        return "N/A"
+
+
+# function to check if brew is installed
+def check_brew_installation():
+    brew = find_executable('brew')
+    if brew is None and "Darwin" in platform.platform():
+        error_and_exit("\nYou must install brew in order to use this command!\n" 
+                        "Please run the following command - \n" 
+                        "/usr/bin/ruby -e \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)\"")
+
+
+# function to ssh to a single node
+def ssh_single_node(node_name, node_ip):
+    global ssh_base_command
+    print "\nConnecting to %s (%s)\n" % (node_name, node_ip)
+    identity = ''
+    if options.identity and path.exists(options.identity):
+        identity = "-i %s " % options.identity
+    system('%s %s %s@%s' % (ssh_base_command, identity, options.user, node_ip))
+    exit()
+
+
+# function to split parsed option to list by comma
+def parser_split(option, opt, value, parser):
+    setattr(parser.values, option.dest, value.split(','))
 
 
 # validate installed packages
@@ -200,19 +238,43 @@ try:
     installed_packages = get_installed_distributions()
     packages = [package.project_name for package in installed_packages]
 except ImportError:
-    errorAndExit("python-pip is not installed, please install it before using this tool!")
+    error_and_exit("python-pip is not installed, please install it before using this tool!")
 
 prettytable_installed = False
 if "prettytable" in packages:
     from prettytable import PrettyTable
     prettytable_installed = True
 else:
-    errorAndExit("you must install prettytable - please run 'sudo pip install prettytable' and try again.")
+    error_and_exit("you must install prettytable - please run 'pip install prettytable' and try again.")
+
+# check yaml package for config file
+yaml_installed = False
+if "PyYAML" in packages:
+    try:
+        from yaml import load, dump
+        yaml_installed = True
+    except:
+        pass
+
+# check yaml package for config file
+boto_installed = False
+if "boto3" in packages:
+    try:
+        from boto3 import session
+        boto_installed = True
+    except:
+        pass
 
 
-usage = "usage: %prog [options] [server_number]\n\
-  server_number: a numeric value corresponding to the server number\n\
-  e.g.: '%prog 1' will ssh into the 1st server in the list."
+# global vars
+conf_file_name = '.ec2-ninja.yaml'
+conf_file_path = environ.get('XDG_CACHE_HOME', path.join(path.expanduser('~'), conf_file_name))
+ssh_connection_timeout = 5
+command_batch_size = 15
+max_panes_allowed = 15
+ssh_base_command = "ssh -o ConnectTimeout=%s" % ssh_connection_timeout
+scp_base_command = "scp -o ConnectTimeout=%s" % ssh_connection_timeout
+usage = "usage: %prog [options]"
 
 parser = OptionParser(usage)
 parser.add_option("-x", "--bust-cache", action="store_true", help="re-fetch servers list from AWS")
@@ -220,9 +282,14 @@ parser.add_option("-u", "--user", action="store", dest="user", help="provide use
 parser.add_option("-i", "--identity", action="store", dest="identity", default="", help="provide identity file")
 parser.add_option("-p", "--profile", action="store", dest="profile", default="", help="provide AWS profile")
 parser.add_option("-r", "--region", action="store", dest="region", default="", help="provide AWS region")
-parser.add_option("-g", "--grep", action="store", dest="grep", help="filter the server list")
-parser.add_option("-e", "--exec", action="store", dest="command", help="run a single command")
-parser.add_option("-t", "--sleep", action="store", dest="sleep", type=int, help="sleep between ssh runs, cancel parallel run")
+parser.add_option("-b", "--bastion", action="store_true", dest="bastion", default="", help="use a predefined bastion host from conf file")
+parser.add_option("-g", "--grep", type="string", action="callback", callback=parser_split, dest="grep", help="filter the servers list")
+parser.add_option("--ungrep", type="string", action="callback", callback=parser_split, dest="ungrep", help="ungrep - exclude from servers list")
+parser.add_option("--split", action="store_true", dest="split", help="open shell panes for each node found - up to %s" % max_panes_allowed)
+parser.add_option("--limit", action="store", dest="limit", type=int, help="limit the number of panes to open, only valid with the split option")
+parser.add_option("-e", "--exec", "-c", "--command", action="store", dest="command", help="run a single command")
+parser.add_option("-s", "--sleep", action="store", dest="sleep", type=int, help="sleep between ssh runs, cancel parallel run")
+parser.add_option("--exit-status", action="store", dest="exit_code", choices=['0','1','passed','failed'], help="filter exec exit code outcome - supply 'passed' or 'failed'")
 parser.add_option("--batch-size", action="store", dest="batch", type=int, help="batch size to run - this is relevant when a sleep is supplied")
 parser.add_option("--copy", action="store", dest="copy", help="copy a file to remote host, must be supplied with --dest option")
 parser.add_option("--dest", action="store", dest="dest", help="destination for file copy, must be supplied with --copy option")
@@ -232,61 +299,92 @@ parser.add_option("--dest-remote", action="store", dest="remote_dest", help="pat
 parser.add_option("--tunnel", action="store", dest="tunnel", help="ssh tunnel to the instance - provide as <local-port>:<remote-port> or <local-port> only for the same port")
 parser.add_option("--ip-type", action="store", dest="iptype", choices=['lan', 'wan'], default="wan", help="choose between lan and wan address (wan is the default)")
 parser.add_option("-l", "--list", action="store_true",  help="show only list (without ssh to instance)")
+options, _ = parser.parse_args()
 
-(options, args) = parser.parse_args()
+# check config file
+if path.isfile(conf_file_path):
+    if not yaml_installed:
+        print_main_message("Warning - found %s file, but the PyYAML package is not installed.\n" \
+              "you must run 'pip install pyyaml' in order to use this file!" % conf_file_name)
+    else:
+        conf = None
+        try:
+            with open(conf_file_path, 'r') as f:
+                conf = load(f)
+        except Exception as e:
+            error_and_exit("Failed to load %s with error: %s" % (conf_file_path, e.message))
+        if conf is not None:
+            if 'default_user' in conf and options.user is None:
+                options.user = conf['default_user']
+            if 'default_ip_type' in conf:
+                if conf['default_ip_type'] in ['lan', 'wan']:
+                    options.iptype = conf['default_ip_type']
+                else:
+                    print "Warning - found invalid default_ip_type in config, setting to lan"
+                    options.iptype = 'lan'
+            if 'ignore_cache' in conf:
+                if type(conf['ignore_cache']) == BooleanType and conf['ignore_cache']:
+                    options.bust_cache = True
+                else:
+                    options.bust_cache = False
+            if 'bastion_hosts' in conf:
+                # allow auto connection with bastion host when environment is set in conf
+                if 'use_for_profiles' in conf['bastion_hosts'] and options.profile in conf['bastion_hosts']['use_for_profiles']:
+                    options.bastion = True
+                if options.bastion:
+                    try:
+                        if not boto_installed:
+                            error_and_exit("You must install boto3 in order to use this feature\n"
+                                           "Please run 'pip install boto3'")
+                        if not options.region:
+                            if not options.profile:
+                                options.profile = 'default'
+                            options.region = session.Session(profile_name=options.profile).region_name
+                        bastion_ip = conf['bastion_hosts'][options.region]['ip']
+                        bastion_user = conf['bastion_hosts'][options.region]['user']
+                        ssh_base_command = "%s -J %s@%s" % (ssh_base_command, bastion_user, bastion_ip)
+                    except Exception as e:
+                        error_and_exit("Could not find a bastion conf for region: %s" % options.region)
 
-ssh_connection_timeout = 5
+
+# set default user to USER in case no option is set or default in conf
 if options.user is None:
     options.user = environ['USER']
-
-
-# check that prettytable is installed if the -p option was provided
+# exclude command option and copy
 if options.command is not None:
     if options.dest is not None or options.copy is not None:
-        errorAndExit("You can't use the exec / sleep option with the copy /dest option!")
+        error_and_exit("You can't use the exec / sleep option with the copy /dest option!")
 # check if dest / copy are supplied alone
 if options.dest is not None or options.copy is not None:
     if options.command is not None or options.sleep is not None:
-        errorAndExit("You can't use the exec / sleep option with the copy /dest option!")
+        error_and_exit("You can't use the exec / sleep option with the copy /dest option!")
     elif options.copy is not None and options.dest is None:
-        errorAndExit("you must supply a copy destination with the --dest option!")
+        error_and_exit("you must supply a copy destination with the --dest option!")
     elif options.dest is not None and options.copy is None:
-        errorAndExit("you must supply a file location with --copy option!")
+        error_and_exit("you must supply a file location with --copy option!")
 # check if remote-dest is supllied alone
 if options.remote_dest is not None and options.remote is None:
-    errorAndExit("you can't use the --remote-dest without the --remote-copy!")
+    error_and_exit("you can't use the --remote-dest without the --remote-copy!")
 # check if option owner is supplied alone
 if options.owner is not None and (options.dest is None or options.copy is None):
-    errorAndExit("you can't use the owner option without supplying a copy / dest command!")
-# check if the -t option is triggered without -c
-if options.sleep is not None:
-    if options.command is None:
-        errorAndExit("you can't use the sleep option without a command.")
-if options.batch is not None and options.sleep is None:
-    errorAndExit("batch size is only relevant with the sleep option!")
+    error_and_exit("you can't use the owner option without supplying a copy / dest command!")
 
 
 cache_dir = environ.get('XDG_CACHE_HOME', path.join(path.expanduser('~'), '.cache'))
 if not path.exists(cache_dir):
     makedirs(cache_dir)
 
-if options.region:
-    cache_file_list = path.join(cache_dir, 'ec2_ninja_list_' + options.region)
-    cache_file_num = path.join(cache_dir, 'ec2_ninja_num_' + options.region)
-else:
-    cache_file_list = path.join(cache_dir, 'ec2_ninja_list')
-    cache_file_num = path.join(cache_dir, 'ec2_ninja_num')
+cache_file = path.join(cache_dir, "ec2_ninja%s%s".strip() % (options.region, options.profile))
 
-
-if options.bust_cache or not path.exists(cache_file_list) or options.profile:
+if options.bust_cache or not path.exists(cache_file):
     print "\nFetching servers..."
-    if path.exists(cache_file_num):
-        remove(cache_file_num)
+    if path.exists(cache_file):
+        remove(cache_file)
     aws_cmd = 'aws ec2 describe-instances --output json'
     if options.profile:
-        aws_cmd += ' --profile ' + options.profile
+        aws_cmd += " --profile %s" % options.profile
     if options.region:
-        aws_cmd += ' --region ' + options.region
+        aws_cmd += " --region %s" % options.region
 
     p = Popen(aws_cmd, shell=True, stdout=PIPE, stderr=PIPE)
     out, err = p.communicate()
@@ -294,247 +392,283 @@ if options.bust_cache or not path.exists(cache_file_list) or options.profile:
         print err
         print '\nUnable to fetch any servers...'
         exit()
-    with open(cache_file_list, 'w') as f:
+    with open(cache_file, 'w') as f:
         f.write(out)
 
 
-output = open(cache_file_list).read()
-parsed = loads(output)
-
+parsed = loads(open(cache_file).read())
 all_instances = []
 if not parsed['Reservations']:
     print 'Could not find any servers.'
-    if path.exists(cache_file_list):
-        remove(cache_file_list)
+    if path.exists(cache_file):
+        remove(cache_file)
     exit()
 
 nodes_list = []
 for instances in parsed['Reservations']:
     for instance in instances['Instances']:
         if instance['State']['Name'] == 'running':
-            if options.iptype == "wan":
-                if 'PublicIpAddress' in instance:
-                    nodes_list.append([instance['InstanceId'], extract_name(instance), instance['PublicIpAddress'], instance['InstanceType'], instance['ImageId'], instance['KeyName']])
-                else:
-                    nodes_list.append([instance['InstanceId'], extract_name(instance), instance['PrivateIpAddress'],instance['InstanceType'], instance['ImageId'], instance['KeyName']])
-            else:
-                nodes_list.append([instance['InstanceId'], extract_name(instance), instance['PrivateIpAddress'], instance['InstanceType'], instance['ImageId'], instance['KeyName']])
+            nodes_list.append([instance['InstanceId'],
+                               extract_name(instance),
+                               extract_ip(instance),
+                               extract_data_or_return_na(instance,'InstanceType'),
+                               extract_data_or_return_na(instance, 'ImageId'),
+                               extract_data_or_return_na(instance, 'KeyName')])
 
-
-grepped_nodes_list = []
+# filter grep and ungrep values
 if options.grep is not None:
-    for node in nodes_list:
-        if options.grep in node[1]:
-            grepped_nodes_list.append(node)
+    grepped_nodes_list = [node for node in nodes_list if (any(grep_val in node[1] for grep_val in options.grep))]
 else:
     grepped_nodes_list = nodes_list
 
+if options.ungrep is not None:
+    grepped_nodes_list = [node for node in grepped_nodes_list if not (any(ungrep_val in node[1] for ungrep_val in options.ungrep))]
+
+# apply limit
+if options.limit is not None:
+    grepped_nodes_list = grepped_nodes_list[:options.limit]
+
 # exit if no results were found
 if len(grepped_nodes_list) == 0:
-    print "\nCould not find any instance that matches this search.\nPlease try again.\n"
+    error_and_exit("Could not find any instance that matches this search.\nPlease try again.")
+
+
+commands_results = []
+groups = split_to_chunks(grepped_nodes_list, command_batch_size)
+last_group = groups[-1]
+
+
+# copy files
+if options.copy is not None and options.dest is not None:
+    if not path.isfile(options.copy):
+        error_and_exit("Cannot find the file: %s" % options.copy)
+
+    copy_file_basename = path.basename(options.copy)
+    if path.isdir(options.dest):
+        dest_file_name = "%s/%s" % (options.dest, copy_file_basename)
+    else:
+        dest_file_name = "%s/%s" % (path.dirname(options.dest), path.basename(options.dest))
+
+    print_main_message("Found %s instances that matches this request.\n"
+                       "Going to upload the file to %s's home directory first, and then copy to %s\n"
+                       "This may take some time, depending on the number of instances..."
+                       % (len(grepped_nodes_list), options.user, options.dest))
+    # need to copy the file to home in batches and then move it to the required folder
+    if options.bastion:
+        copy_command = '%s -o ProxyCommand="ssh -W %%h:%%p %s@%s" %s %s@<host_ip_place_holder>:~' \
+                       % (scp_base_command, bastion_user, bastion_ip, options.copy, options.user)
+    else:
+        copy_command = "%s %s %s@<host_ip_place_holder>:~"  % (scp_base_command, options.copy, options.user)
+    execute_in_batches(groups, copy_command)
+    print_main_message("Done uploading %s to home directory, going to copy to %s"
+                       % (options.copy, options.dest))
+    # if option owner was supplied, need to add a chown command to the copy command
+    tmp_cp_command = "sudo mv %s %s" % (copy_file_basename, dest_file_name)
+    if options.owner is not None:
+        # if only user supplied as owner (with no group), chain the same group
+        if not ":" in options.owner:
+            options.owner = "%s:%s" % (options.owner, options.owner)
+        chown_command = "sudo chown %s %s" % (options.owner, dest_file_name)
+        tmp_cp_command = "%s; %s" % (tmp_cp_command, chown_command)
+    ssh_command = "%s %s@<host_ip_place_holder> '%s'" \
+                   % (ssh_base_command, options.user, tmp_cp_command)
+    # run copy command
+    execute_in_batches(groups, ssh_command)
+    print_main_message("Done copying %s to all nodes!" % options.copy)
     exit()
 
-# print and ssh only if a command \ copy \ tunnel is not supplied
-if options.command is None and options.copy is None and options.remote is None:
-    # sort and print the nodes
-    try:
-        # sorted_inst = OrderedDict(sorted(grepped_nodes_list.items()))
-        table = PrettyTable(['#', 'ID', 'Name', 'IP','Type', 'AMI', 'Key'])
-        table.align = "l"
-        table.border = True
-        print_main_message("Servers list:")
-        i = 1
-        for node in grepped_nodes_list:
-            num = '[%d]' % i
-            i += 1
-            table.add_row([num, node[0], node[1], node[2], node[3], node[4], node[5]])
-        print table
-    except Exception as e:
-        errorAndExit(e)
+# run command in parallel or with sleep
+if options.command:
+    print_main_message("Found %s instances that matches this request.\n"
+           "Executing command `%s` on all instances.\n"
+            "this may take some time, depending on the number of instances.."
+            % (len(grepped_nodes_list), options.command))
+    ssh_command = "%s %s@<host_ip_place_holder> '%s'" \
+                  % (ssh_base_command, options.user, options.command)
 
-    # exit if the list flag is triggered
-    if options.list:
-        print "\n"
-        exit()
-    # ask the user to choose which instance to connect to
-    num = get_user_choice(1, 1, i, "Which server would you like to connect to ")
-    # ssh to instance - in case the user flag is triggered, use a different user name
-    node_name = grepped_nodes_list[num - 1][1]
-    node_ip = grepped_nodes_list[num - 1][2]
-    # check if the tunnel option was supplied
-    if options.tunnel is None:
-        print "\nConnecting to %s (%s)" % (node_name, node_ip)
-        identity = ''
-        if options.identity and path.exists(options.identity):
-            identity = "-i %s " % options.identity
-        system('ssh -o ConnectTimeout=%s %s %s@%s' % (ssh_connection_timeout, identity, options.user, node_ip))
+    if options.batch is not None:
+        command_batch_size = options.batch
+        groups = split_to_chunks(grepped_nodes_list, command_batch_size)
+        last_group = groups[-1]
+
+    execute_in_batches(groups, ssh_command)
+    print_main_message("Done running %s to all nodes!" % options.command)
+    exit()
+
+# copy a file from remote to local
+if options.remote is not None:
+    if options.remote_dest is None:
+        options.remote_dest = "%s/remote_copy/" % cache_dir
+    if path.isfile(options.remote_dest):
+        error_and_exit("%s exists as a file - cannot copy files into it!" % options.remote_dest)
+    if not path.isdir(options.remote_dest):
+        makedirs(options.remote_dest)
+    # check if the tmp folder is not empty, and ask the user if he wants to delete the data in there
+    if not listdir(options.remote_dest) == []:
+        ans = raw_input("\nThe folder %s is not empty!\nwould you like to delete the files in that folder? [y/n] " % options.remote_dest)
+        if ans.lower() != "y" and ans.lower() != "n":
+            error_and_exit("wrong answer!")
+        if ans.lower() == "y":
+            file_list = [f for f in listdir(options.remote_dest)]
+            for f in file_list:
+                remove("%s/%s" % (options.remote_dest, f))
+    print_main_message("Found %s instances that matches this request.\n"
+                       "copying file '%s' from all instances to path %s.\n"
+                       "this may take some time, depending on the number of instances.."
+                       % (len(grepped_nodes_list), options.remote, options.remote_dest))
+    if options.bastion:
+        copy_command = '%s -o ProxyCommand="ssh -W %%h:%%p %s@%s" %s@<host_ip_place_holder>:%s %s<host_name_place_holder>-%s' \
+                        % (scp_base_command, bastion_user, bastion_ip, options.user,
+                        options.remote, options.remote_dest, path.basename(options.remote))
     else:
-        # open a tunnel connection and hold it until ctrl + c is given
-        local_port = options.tunnel
-        remote_port = options.tunnel
-        if ":" in options.tunnel:
-            local_port = options.tunnel[:options.tunnel.index(":")]
-            remote_port = options.tunnel[options.tunnel.index(":") + 1:]
-        try:
-            a = int(local_port)
-            a = int(remote_port)
-        except:
-            errorAndExit("while mapping ports, make sure you are entering a number!")
-        if int(local_port) < 1024:
-            if int(local_port) < 24:
-                local_port = int(local_port) + (1024 - int(local_port))
-            else:
-                local_port = int(local_port) + 1000
-            print "\nWARNING - You can't map a local port to be less than 1024\n" \
-                  "Setting the port to %i" % (int(local_port))
+        copy_command = "%s %s@<host_ip_place_holder>:%s %s<host_name_place_holder>-%s" \
+                             % (scp_base_command, options.user, options.remote, options.remote_dest,
+                                path.basename(options.remote))
+    execute_in_batches(groups, copy_command)
+    print "\nDone copying %s from all nodes, starting compare (md5)..." % options.remote
 
-        ssh_tunnel_cmd = "ssh -L %s:127.0.0.1:%s  %s@%s -N > /dev/null 2>&1" \
-                         % (local_port, remote_port, options.user, node_ip)
-        try:
-            print_main_message("Created an ssh tunnel to host %s (%s).\n"
-                               "Local port %s is now mapped to port %s on the remote host.\n"
-                               "type ctrl + c to exit..." % (node_name, node_ip, local_port, remote_port))
-            system(ssh_tunnel_cmd)
-        except Exception as e:
-            errorAndExit("while trying to create an ssh tunnel to %s" % node_name)
+    # compare the files
+    files_to_compare = glob("%s/*" % options.remote_dest)
+    files_md5_check = []
+    all_md5 = []
+    for f in files_to_compare:
+        with open(f, 'rb') as input_file:
+            data = input_file.read()
+            files_md5_check.append("%s:%s" % ( f, md5(data).hexdigest()))
+            if md5(data).hexdigest() not in all_md5:
+                all_md5.append(md5(data).hexdigest())
+    # if more than one md5 was found, print error, else print OK
+    if len(all_md5) > 1:
+        print_main_message("Found md5 changes, please review the following:")
+        for md5_res in all_md5:
+            print "\n============ md5: %s ============" % md5_res
+            for check in files_md5_check:
+                if md5_res in check:
+                    print check
+        print "\n\n"
+    else:
+        print_main_message("No diff was found - all files has the same md5 hash!")
+    exit()
 
+# sort and print the nodes
+node_counter = 1
+try:
+    # sorted_inst = OrderedDict(sorted(grepped_nodes_list.items()))
+    table = PrettyTable(['#', 'ID', 'Name', 'IP', 'Type', 'AMI', 'Key'])
+    table.align = "l"
+    table.border = True
+    for node in grepped_nodes_list:
+        num = '[%d]' % node_counter
+        node_counter += 1
+        table.add_row([num, node[0], node[1], node[2], node[3], node[4], node[5]])
+    print_main_message("Servers list:")
+    print table
+except Exception as e:
+    error_and_exit(e.message)
+
+# exit if the list flag is triggered
+if options.list:
+    print "\n"
+    exit()
+
+# open split panes in case the split command is triggered
+if options.split is not None:
+    if "Darwin" not in platform.platform():
+        error_and_exit("This feature is for mac OS only!")
+    check_brew_installation()
+    if not yaml_installed:
+        error_and_exit("You must install the PyYAML package in order to use this feature!\n"
+                       "Please run 'pip install pyyaml' and try again.\n")
+    itermocil = find_executable('itermocil')
+    if itermocil is None:
+        error_and_exit("You must install itermocil in order to use this feature\n"
+                       "Please run 'brew update && brew install TomAnthony/brews/itermocil' and try again.\n"
+                       "for more information go to https://github.com/TomAnthony/itermocil")
+    panes_count = node_counter - 1
+    if panes_count > max_panes_allowed:
+        print_main_message("Warning - Found more than %s nodes, will connect to the first %s..."
+                           % (max_panes_allowed, max_panes_allowed))
+        grepped_nodes_list = grepped_nodes_list[:max_panes_allowed]
+    if panes_count == 1:
+        print_main_message("Warning - Found a single node - connecting without terminal panes...")
+        ssh_single_node(grepped_nodes_list[1], grepped_nodes_list[2])
+    if panes_count == 2:
+        layout = 'even-horizontal'
+    elif panes_count == 3:
+        layout = 'main-vertical'
+    else:
+        layout = 'tiled'
+
+    pane_conf = """\
+windows:
+- name: ssh-consul-panes
+layout: %s
+root: ~
+panes:
+""" % layout
+
+    for node in grepped_nodes_list:
+        pane_conf = pane_conf + 3 * " " + "- %s %s@%s\n" \
+                                          % (ssh_base_command, options.user, node[2])
+    itermocil_home_path = path.join(path.expanduser('~'), '.itermocil')
+    itermocil_confs_path = path.join(path.expanduser('~'), '.teamocil')
+    if not path.isdir(itermocil_home_path):
+        makedirs(itermocil_home_path)
+    if not path.isdir(itermocil_confs_path):
+        makedirs(itermocil_confs_path)
+    try:
+        data = load(pane_conf)
+        panes_conf_file_name = 'ec2ninja'
+        panes_conf_file_path = path.join(itermocil_confs_path, "%s.yml" % panes_conf_file_name)
+        if path.isfile(panes_conf_file_path):
+            remove(panes_conf_file_path)
+        with open(panes_conf_file_path, 'w') as outfile:
+            dump(data, outfile, default_flow_style=False)
+        print_main_message("Opening terminal panes\n"
+                           "Type 'Option + Command + i' in order to control all panes in the new tab.")
+        sleep(1)
+        system("itermocil %s" % panes_conf_file_name)
+    except Exception as e:
+        error_and_exit("something went wrong while configuring.\n error message: %s" % e.message)
+    exit()
+
+if len(grepped_nodes_list) > 1:
+    # ask the user to choose which instance to connect to
+    num = get_user_choice(1, 1, node_counter, "Which server would you like to connect to ")
 else:
-    # not an ssh request, need to execute a command or copy file
-    command_batch_size = 10
-    commands_results = []
-    groups = split_to_chunks(grepped_nodes_list, command_batch_size)
-    last_group = groups[-1]
+    num = 1
 
-    # copy files
-    if options.copy is not None and options.dest is not None:
-        copy_file_basename = path.basename(options.copy)
-        if path.isdir(options.dest):
-            dest_file_name = "%s/%s" % (options.dest, copy_file_basename)
+# check if the tunnel option was supplied
+node_name = grepped_nodes_list[num - 1][1]
+node_ip = grepped_nodes_list[num - 1][2]
+if options.tunnel is None and options.split is None:
+    ssh_single_node(node_name, node_ip)
+else:
+    # open a tunnel connection and hold it until ctrl + c is given
+    local_port = options.tunnel
+    remote_port = options.tunnel
+    if ":" in options.tunnel:
+        local_port = options.tunnel[:options.tunnel.index(":")]
+        remote_port = options.tunnel[options.tunnel.index(":") + 1:]
+    try:
+        a = int(local_port)
+        a = int(remote_port)
+    except:
+        error_and_exit("while mapping ports, make sure you are entering a number!")
+    if int(local_port) < 1024:
+        if int(local_port) < 24:
+            local_port = int(local_port) + (1024 - int(local_port))
         else:
-            dest_file_name = "%s/%s" % (path.dirname(options.dest), path.basename(options.dest))
+            local_port = int(local_port) + 1000
+        print "\nWARNING - You can't map a local port to be less than 1024\n" \
+              "Setting the port to %i" % (int(local_port))
 
-        # check if the user is using windows or mac / linux
-        # in case of windows, copy the file to the user's home directory, and them move dest
-        if platform.system() == "Windows":
-            copy_to_home_and_move(grepped_nodes_list, ssh_connection_timeout, groups, copy_file_basename, dest_file_name)
-        else:
-            # if mac / linux, need to check the rsync version, since only rsync 3.1 + support changing the owner
-            if options.owner is None:
-                # just copy, no need to change the owner
-                copy_command = "rsync -aHWvzxe ssh --rsync-path='sudo rsync' %s %s@<host_ip_place_holder>:%s" % (
-                options.copy, options.user, dest_file_name)
-                print_main_message("Found %s instances that matches this request.\n"
-                                   "Copying from %s to %s\n"
-                                   "This may take some time, depending on the number of instances..."
-                                   % (len(grepped_nodes_list), options.copy, options.dest))
-                execute_in_batches(groups, copy_command)
-            else:
-                # check if brew is installed version 3.1 + for rsync
-                already_copied = False
-                brew = find_executable('brew')
-                if brew is None:
-                    if "Darwin" in platform.platform():
-                        errorAndExit("\nYou must install brew in order to use the copy command!\n"
-                              "Please run the following command - \n"
-                              "/usr/bin/ruby -e \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)\"")
-                else:
-                    # check rsync version
-                    rsync_ver = getoutput("rsync --version | grep version")
-                    rsync_ver = rsync_ver[rsync_ver.index("version") + 7:].strip()[:5]
-                    if StrictVersion(rsync_ver) < StrictVersion("3.1.0"):
-                        if "Darwin" in platform.platform():
-                            errorAndExit("\nYou need to upgrade the rsync version on your localhost before using the --owner flag.\n"
-                                  "Mac users - please run the following commands - \n"
-                                  "$> brew tap homebrew/dupes\n"
-                                  "$> brew install rsync")
-                        else:
-                            copy_to_home_and_move(grepped_nodes_list, ssh_connection_timeout, groups, copy_file_basename, dest_file_name)
-                            already_copied = True
-                    else:
-                        if not ":" in options.owner:
-                            options.owner = "%s:%s" % (options.owner, options.owner)
-                        copy_command = "rsync -aHWvzxe ssh --rsync-path='sudo rsync' --chown=%s %s %s@<host_ip_place_holder>:%s" % (
-                        options.owner, options.copy, options.user, dest_file_name)
-
-                # run copy command (if not copied already)
-                if not already_copied:
-                    print_main_message("Found %s instances that matches this request.\n"
-                                       "Copying from %s to %s\n"
-                                       "This may take some time, depending on the number of instances..."
-                                       % (len(grepped_nodes_list), options.copy, options.dest))
-                    execute_in_batches(groups, copy_command)
-
-
-
-    # run command in parallel or with sleep
-    if options.command:
-        print_main_message("Found %s instances that matches this request.\n"
-               "Executing command `%s` on all instances.\n"
-                "this may take some time, depending on the number of instances.."
-                % (len(grepped_nodes_list), options.command))
-        ssh_command = "ssh -o ConnectTimeout=%s %s@<host_ip_place_holder> '%s'" \
-                      % (ssh_connection_timeout, options.user, options.command)
-        # if the sleep options was supplied, changed the batch size to 1
-        if options.sleep is not None:
-            if options.batch is not None:
-                command_batch_size = options.batch
-            else:
-                command_batch_size = 1
-            groups = split_to_chunks(grepped_nodes_list, command_batch_size)
-            last_group = groups[-1]
-        execute_in_batches(groups, ssh_command)
-        print_main_message("Done running %s to all nodes!" % (options.command))
-
-    # copy a file from remote to local
-    if options.remote is not None:
-        if options.remote_dest is None:
-            options.remote_dest = "%s/remote_copy/" % cache_dir
-        print_main_message("Found %s instances that matches this request.\n"
-                           "copying file '%s' from all instances to path %s.\n"
-                           "this may take some time, depending on the number of instances.."
-                           % (len(grepped_nodes_list), options.remote, options.remote_dest))
-
-        if platform.system() == "Windows":
-            copy_to_tmp_remote = "scp -o ConnectTimeout=%s %s@<host_ip_place_holder>:%s %s/<host_name_place_holder>-%s" \
-                                   % (ssh_connection_timeout, options.user, options.remote, options.remote_dest, path.basename(options.remote))
-        else:
-            copy_to_tmp_remote = "rsync -aHWvzxe ssh --rsync-path='sudo rsync' %s@<host_ip_place_holder>:%s %s/<host_name_place_holder>-%s" % \
-                                 (options.user, options.remote, options.remote_dest, path.basename(options.remote))
-
-        if path.isfile(options.remote_dest):
-            errorAndExit("%s exists as a file - cannot copy files into it!" % options.remote_dest)
-        if not path.isdir(options.remote_dest):
-            makedirs(options.remote_dest)
-        # check if the tmp folder is not empty, and ask the user if he wants to delete the data in there
-        if not listdir(options.remote_dest) == []:
-            ans = raw_input("The folder %s is not empty, would you like to delete files in it? [y/n] " % (options.remote_dest))
-            if ans.lower() != "y" and ans.lower() != "n":
-                errorAndExit("wrong answer!")
-            if ans.lower() == "y":
-                file_list = [f for f in listdir(options.remote_dest)]
-                for f in file_list:
-                    remove("%s/%s" % (options.remote_dest, f))
-        execute_in_batches(groups, copy_to_tmp_remote)
-        print_main_message("Done copying %s from all nodes, starting compare (md5)..." % (options.remote))
-        # compare the files
-        # check if there is more than one md5 for all files
-        files_to_compare = glob("%s/*" % options.remote_dest)
-        files_md5_check = []
-        all_md5 = []
-        for f in files_to_compare:
-            with open(f, 'rb') as input_file:
-                data = input_file.read()
-                files_md5_check.append("%s:%s" % ( f, md5(data).hexdigest()))
-                if md5(data).hexdigest() not in all_md5:
-                    all_md5.append(md5(data).hexdigest())
-        # if more than one md5 was found, print error, else print OK
-        if len(all_md5) > 1:
-            print "Found changes, here is a the full file list with their md5 check:"
-            print "=" * 66
-            for md5_res in all_md5:
-                print "\n============ md5: %s ============" % md5_res
-                for check in files_md5_check:
-                    if md5_res in check:
-                        print check
-        else:
-            print "All files appear to be the same - hurray!\n"
+    ssh_tunnel_cmd = "ssh -L %s:127.0.0.1:%s  %s@%s -N > /dev/null 2>&1" \
+                     % (local_port, remote_port, options.user, node_ip)
+    try:
+        print_main_message("Created an ssh tunnel to host %s (%s).\n"
+                           "Local port %s is now mapped to port %s on the remote host.\n"
+                           "type ctrl + c to exit..." % (node_name, node_ip, local_port, remote_port))
+        system(ssh_tunnel_cmd)
+    except Exception as e:
+        error_and_exit("while trying to create an ssh tunnel to %s.\nerror message: %s" % (node_name, e.message))
