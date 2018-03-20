@@ -601,10 +601,10 @@ if options.split is not None:
 
     pane_conf = """\
 windows:
-- name: ssh-consul-panes
-layout: %s
-root: ~
-panes:
+- name: ec2ninja
+  layout: %s
+  root: ~
+  panes:
 """ % layout
 
     for node in grepped_nodes_list:
