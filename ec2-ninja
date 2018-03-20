@@ -286,7 +286,7 @@ parser.add_option("-b", "--bastion", action="store_true", dest="bastion", defaul
 parser.add_option("-g", "--grep", type="string", action="callback", callback=parser_split, dest="grep", help="filter the servers list")
 parser.add_option("--ungrep", type="string", action="callback", callback=parser_split, dest="ungrep", help="ungrep - exclude from servers list")
 parser.add_option("--split", action="store_true", dest="split", help="open shell panes for each node found - up to %s" % max_panes_allowed)
-parser.add_option("--limit", action="store", dest="limit", type=int, help="limit the number of panes to open, only valid with the split option")
+parser.add_option("--limit", action="store", dest="limit", type=int, help="limit the number of panes to open")
 parser.add_option("-e", "--exec", "-c", "--command", action="store", dest="command", help="run a single command")
 parser.add_option("-s", "--sleep", action="store", dest="sleep", type=int, help="sleep between ssh runs, cancel parallel run")
 parser.add_option("--exit-status", action="store", dest="exit_code", choices=['0','1','passed','failed'], help="filter exec exit code outcome - supply 'passed' or 'failed'")
