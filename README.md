@@ -20,11 +20,12 @@ ec2-ninja has the following flags -
 Options:
   -h, --help:                         show this help message and exit
   -x, --bust-cache:                   re-fetch servers list from AWS
+  -d, --use-cache:                    force load from disk - override conf file ignore cache option
   -u USER, --user=USER:               provide user
   -i IDENTITY, --identity=IDENTITY:   provide identity file
+  --passwd:                           don't use ssh keys, prompt for password
   -p PROFILE, --profile=PROFILE:      provide AWS profile
   -r REGION, --region=REGION:         provide AWS region
-  -b, --bastion                       use a predefined bastion host from conf file
   -g GREP, --grep=GREP:               filter the server list
   --ungrep=UNGREP:                    ungrep - exclude from servers list
   --split:                            open shell panes for each node found - up to 15
