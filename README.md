@@ -45,6 +45,9 @@ Options:
 
 ## example usage
 
+### split panes:
+![](docs/ssh-split.gif)
+
 ### list ec2 instances with lan IP:
 ![](docs/lan_ip.png)
 
@@ -63,24 +66,42 @@ Options:
 ## config file
 ec2-ninja also suuport a config file, which can hold default values.  
 the file must be saved as ~/.ec2-ninja.yaml.  
-the following options are valid - 
+the following options are valid -
 
 ```
-default_user: spiritus # use as default user
-default_ip_type: lan # use as default ip type for ssh / scp
-ignore_cache: yes # always refresh from aws, don't use local cache file
-# define bastion hosts
+# ec2-ninja conf file
+# This file must be saved as: ~/.ec2-ninja.yaml
+
+default_user: ubuntu # use as default user
+default_ip_type: lan # use as default ip type
+ignore_cache: yes # always refresh from AWS, don't use local cache file (unless -d option is used)
+
+####  multiple regions per profile ####
+# when defined, ec2-ninja will automatically fetch servers from all regions defined
+# you can override this default value with the --region option
+multi_region:
+  default:
+    - us-east-1
+    - us-west-2
+  prod:
+    - us-east-1
+    - eu-central-1
+  qa:
+    - us-east-1
+    - eu-central-1
+
+####  bastion hosts ####
+# for each bastion host, you must define an IP address and user.
+# you can also define an additional ssh key (full path), if it's not your in ssh-agent's keychain.
+# if a host is found for the current profile and region, it will be automatically used
 bastion_hosts:
-  # list of porfiles for auto using bastion
-  use_for_profiles:
-    - prod
-  # define aws regions and their bastion host ip + user name
-  us-east-1:
-    ip: <bastion-ip>
-    user: <bastion-user>
-  eu-central-1:
-    ip: <bastion-ip>
-    user: <bastion-user>
+  prod:
+    us-east-1:
+      ip: <ip-address>
+      user: <user>
+    eu-central-1:
+      ip: <ip-address>
+      user: <user>
 ```
 ## Installation
 ```
