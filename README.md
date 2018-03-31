@@ -1,7 +1,7 @@
 # ec2-ninja
 Forked from [ssh2](https://github.com/soheil/ssh2), ec2-ninja is an interactive command line tool which allows you to control your EC2 instances.
 
-in additional to ssh capabilities, ec2-ninja allows you to :
+in additional to ssh capabilities, ec2-ninja allows you to:
 * run ssh commands
 * copy file to ec2 instances
 * copy files from ec2 instances and compare (md5 check)
@@ -65,7 +65,7 @@ Options:
 ![](docs/ssh-tunnel.png)
 
 ## config file
-ec2-ninja also suuport a config file, which can hold default values.  
+ec2-ninja also suport a config file, which can hold default values.  
 the file must be saved as ~/.ec2-ninja.yaml.  
 the following options are valid -
 
@@ -78,7 +78,7 @@ default_ip_type: lan # use as default ip type
 ignore_cache: yes # always refresh from AWS, don't use local cache file (unless -d option is used)
 
 ####  multiple regions per profile ####
-# when defined, ec2-ninja will automatically fetch servers from all regions defined
+# when defined, ec2-ninja will automatically fetch servers from all regions 
 # you can override this default value with the --region option
 multi_region:
   default:
