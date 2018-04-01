@@ -67,7 +67,7 @@ def add_command_options(base_command):
 
 # This function builds ssh commands
 def get_ssh_command(exec_from_local=False):
-    command = add_command_options("ssh -o ConnectTimeout=%s " % ssh_connection_timeout)
+    command = add_command_options("ssh -o ConnectTimeout=%s" % ssh_connection_timeout)
     if exec_from_local:
         return "%s %s@%s '%s'" % (command, options.user, ip_ph, options.command)
     else:
@@ -76,7 +76,7 @@ def get_ssh_command(exec_from_local=False):
 
 # This function builds scp commands to / from node
 def get_scp_command():
-    command = add_command_options("scp -o ConnectTimeout=%s -o StrictHostKeyChecking=no" % ssh_connection_timeout)
+    command = add_command_options("scp -o ConnectTimeout=%s" % ssh_connection_timeout)
     if options.copy is not None and options.dest is not None:
         return "%s %s %s@%s:~" % (command, options.copy, options.user, ip_ph)
     elif options.remote is not None:
