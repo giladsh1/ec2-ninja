@@ -76,7 +76,7 @@ the following options are valid -
 default_user: ubuntu # use as default user
 default_ip_type: lan # use as default ip type
 ignore_cache: yes # always refresh from AWS, don't use local cache file (unless -d option is used)
-
+batch_size: 20 # change default ssh batch size (depending on your intermet connection, cpu, etc)
 ####  multiple regions per profile ####
 # when defined, ec2-ninja will automatically fetch servers from all regions 
 # you can override this default value with the --region option
