@@ -10,7 +10,6 @@ from os import system, path, environ, makedirs, listdir, remove
 from json import loads
 from optparse import OptionParser
 from subprocess import Popen, PIPE
-from shlex import split as shlex_split
 from hashlib import md5
 from glob import glob
 from platform import platform
@@ -68,7 +67,7 @@ def add_command_options(base_command):
 
 # This function builds ssh commands
 def get_ssh_command(exec_from_local=False):
-    command = add_command_options("ssh -o ConnectTimeout=%s" % ssh_connection_timeout)
+    command = add_command_options("ssh -o ConnectTimeout=%s " % ssh_connection_timeout)
     if exec_from_local:
         return "%s %s@%s '%s'" % (command, options.user, ip_ph, options.command)
     else:
@@ -77,7 +76,7 @@ def get_ssh_command(exec_from_local=False):
 
 # This function builds scp commands to / from node
 def get_scp_command():
-    command = add_command_options("scp -o ConnectTimeout=%s" % ssh_connection_timeout)
+    command = add_command_options("scp -o ConnectTimeout=%s -o StrictHostKeyChecking=no" % ssh_connection_timeout)
     if options.copy is not None and options.dest is not None:
         return "%s %s %s@%s:~" % (command, options.copy, options.user, ip_ph)
     elif options.remote is not None:
@@ -100,20 +99,16 @@ def split_to_chunks(list_to_split, num):
 def execute_command(command_to_execute, host_name, host_ip, node_region):
     global commands_results
     try:
-        command_args = shlex_split(command_to_execute)
-        ssh_execute = Popen(command_args,
-                            shell=False,
-                            stdout=PIPE,
-                            stderr=PIPE)
-        out, err = ssh_execute.communicate()
-        if ssh_execute.returncode == 0:
-            commands_results.append([ssh_execute.returncode, out.splitlines(),
+        p = Popen(command_to_execute, shell=True, stdout=PIPE, stderr=PIPE)
+        out, err = p.communicate()
+        if p.returncode == 0:
+            commands_results.append([p.returncode, out.splitlines(),
                                      host_name, host_ip, node_region, command_to_execute])
         else:
-            commands_results.append([ssh_execute.returncode, err.splitlines(),
+            commands_results.append([p.returncode, err.splitlines(),
                                      host_name, host_ip, node_region, command_to_execute])
     except Exception as e:
-        print e
+        error_and_exit(e.message)
         exit()
 
 
@@ -190,19 +185,16 @@ def print_node_result(node_name, node_ip, node_region, node_command, exit_code, 
     print "\n" + "=" * output_len
     print node_table
     # print command
-    print "command:"
-    print "-" * len("command:")
-    print node_command
+    print "command:\n" + "-" * len("command:")
+    print '&& \ \n'.join(x.strip() for x in node_command.split('&&'))
     # print exit code in color
     if exit_code == 0 or exit_code == 'passed':
         print_in_color('green', "exit code: %s\n" % exit_code)
     else:
         print_in_color('red', "exit code: %s\n" % exit_code)
     # print command output
-    print "command output:"
-    print "-" * len("command output:")
-    for line in command_output:
-        print line
+    print "command output:\n" + "-" * len("command output:")
+    print "\n".join(command_output)
 
 
 # This function prints the result from the run_batch function
@@ -237,10 +229,11 @@ def print_main_message(msg):
     if longest_line > 180:
         longest_line = 180
     padding = 8
-    print "\n" + ("#" * (longest_line + padding))
+    separator = "="
+    print "\n" + (separator * (longest_line + padding))
     for line in msg.splitlines():
         print (" " * (padding / 2)) + line
-    print ("#" * (longest_line + padding)) + "\n"
+    print (separator * (longest_line + padding)) + "\n"
 
 
 # This function returns a choice from the user
@@ -413,7 +406,7 @@ parser.add_option("--limit", action="store", dest="limit", type=int, help="limit
 parser.add_option("-e", "--exec", "-c", "--command", action="store", dest="command", help="run a single command")
 parser.add_option("-s", "--sleep", action="store", dest="sleep", type=int, help="sleep between ssh runs, cancel parallel run")
 parser.add_option("--exit-status", action="store", dest="exit_code", choices=['0','1','passed','failed'], help="filter exec exit code outcome - supply 'passed' or 'failed'")
-parser.add_option("--batch-size", action="store", dest="batch", type=int, help="batch size to run - this is relevant when a sleep is supplied")
+parser.add_option("--batch-size", action="store", dest="batch", default=None, type=int, help="ssh batch size. supply in conf or command line. default is 15")
 parser.add_option("--copy", action="store", dest="copy", help="copy a file to remote host, must be supplied with --dest option")
 parser.add_option("--dest", action="store", dest="dest", help="destination for file copy, must be supplied with --copy option")
 parser.add_option("--owner", action="store", dest="owner", help="change the owner of the file after copying, must be supplied with --copy/--dest option")
@@ -456,6 +449,12 @@ if path.isfile(conf_file_path):
             # get multi region config
             if 'multi_region' in conf and not options.region:
                 options.region = conf['multi_region'][options.profile]
+            if 'batch_size' in conf and not options.batch:
+                if isinstance(conf['batch_size'], int):
+                    options.batch = conf['batch_size']
+                else:
+                    print "Warning - found invalid batch_size in config, setting to default"
+                    options.batch = command_batch_size
             if 'bastion_hosts' in conf:
                 try:
                     if not boto_installed:
@@ -519,20 +518,20 @@ if options.limit is not None:
 if len(grepped_nodes_list) == 0:
     error_and_exit("Could not find any instance that matches this search.\nPlease try again.")
 
+# set command batch size to default if Not found in command or conf
+if options.batch is None:
+    options.batch = command_batch_size
+
 commands_results = []
-groups = split_to_chunks(grepped_nodes_list, command_batch_size)
+groups = split_to_chunks(grepped_nodes_list, options.batch)
 last_group = groups[-1]
 
 # run command
 if options.command:
     print_main_message("Found %s instances that matches this request.\n"
-           "Executing command `%s` on all instances.\n"
-            "this may take some time, depending on the number of instances.."
-            % (len(grepped_nodes_list), options.command))
-    if options.batch is not None:
-        command_batch_size = options.batch
-        groups = split_to_chunks(grepped_nodes_list, command_batch_size)
-        last_group = groups[-1]
+                       "Executing command `%s` on all instances.\n"
+                       "this may take some time, depending on the number of instances.."
+                        % (len(grepped_nodes_list), options.command))
 
     execute_in_batches(groups, get_ssh_command(exec_from_local=True))
     print_main_message("Done running %s to all nodes!" % options.command)
@@ -555,14 +554,6 @@ if options.copy is not None and options.dest is not None:
         dest_file_name = "%s/%s" % (options.dest, copy_file_basename)
     else:
         dest_file_name = "%s/%s" % (path.dirname(options.dest), path.basename(options.dest))
-
-    # need to copy the file to home in batches and then move it to the required folder
-    copy_command = get_scp_command()
-    execute_in_batches(groups, copy_command)
-    print_main_message("Done uploading %s to home directory, copying to %s"
-                       % (options.copy, options.dest))
-    
-    # move file to destination
     # if option owner was supplied, need to add a chown command to the copy command
     options.command = "sudo mv ~/%s %s" % (copy_file_basename, dest_file_name)
     if options.owner is not None:
@@ -571,7 +562,8 @@ if options.copy is not None and options.dest is not None:
             options.owner = "%s:%s" % (options.owner, options.owner)
         options.command = "%s ; sudo chown %s %s" % (options.command, options.owner, dest_file_name)
     ssh_command = get_ssh_command(exec_from_local=True)
-    execute_in_batches(groups, ssh_command)
+    copy_command = "%s&&%s" % (get_scp_command(), ssh_command)
+    execute_in_batches(groups, copy_command)
     print_main_message("Done copying %s to all nodes!" % options.copy)
     exit()
 
@@ -732,8 +724,8 @@ else:
     try:
         a = int(local_port)
         a = int(remote_port)
-    except:
-        error_and_exit("while mapping ports, make sure you are entering a number!")
+    except Exception as e:
+        error_and_exit("while mapping ports, make sure you are entering a number!\n error:" % e.message)
     if int(local_port) < 1024:
         if int(local_port) < 24:
             local_port = int(local_port) + (1024 - int(local_port))
