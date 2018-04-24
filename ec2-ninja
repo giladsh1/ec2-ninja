@@ -15,6 +15,15 @@ from glob import glob
 from platform import platform
 from distutils.spawn import find_executable
 from types import BooleanType
+from commands import getstatusoutput, getoutput
+from pkg_resources import require, DistributionNotFound
+from signal import signal, SIGINT
+
+
+# This function handles SIGINT interrupt
+def sigint_interrupt(signum, frame):
+    print 'Caught keyboard interrupt - exiting\n'
+    exit()
 
 
 # This function changes the color of the prompt
@@ -289,8 +298,8 @@ def check_brew_installation():
     brew = find_executable('brew')
     if brew is None and "Darwin" in platform():
         error_and_exit("\nYou must install brew in order to use this command!\n"
-                        "Please run the following command - \n"
-                        "/usr/bin/ruby -e \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)\"")
+                       "Please run the following command - \n"
+                       "/usr/bin/ruby -e \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)\"")
 
 
 # function to ssh to a single node
@@ -337,41 +346,28 @@ def fetch_from_aws(aws_region):
                                        extract_data_or_return_na(instance, 'InstanceType'),
                                        extract_data_or_return_na(instance, 'ImageId')])
 
-# validate installed packages
-pip_installed = False
-try:
-    from pip import get_installed_distributions
-    pip_installed = True
-    installed_packages = get_installed_distributions()
-    packages = [package.project_name for package in installed_packages]
-except ImportError:
+# catch SIGINT
+signal(SIGINT, sigint_interrupt)
+
+# validate pip and installed packages
+pip_version = getstatusoutput('pip -V')
+if pip_version[0] != 0:
     error_and_exit("python-pip is not installed, please install it before using this tool!")
+if 'python 2.7' not in pip_version[1]:
+    error_and_exit("This script currently supports python 2.7 only!")
 
-prettytable_installed = False
-if "prettytable" in packages:
-    from prettytable import PrettyTable
-    prettytable_installed = True
-else:
-    error_and_exit("you must install prettytable - please run 'pip install prettytable' and try again.")
+packages = [pkg.split('==')[0] for pkg in getoutput('pip freeze').split('\n')]
+required_packages = ['prettytable', 'PyYAML', 'boto3']
+try:
+    require(required_packages)
+except DistributionNotFound:
+    error_and_exit("One of the required pip packages is not installed!\n"
+                   "Please install all packages using the following command in the project's root folder:\n"
+                   "pip install -r requirements.txt")
 
-# check yaml package for config file
-yaml_installed = False
-if "PyYAML" in packages:
-    try:
-        from yaml import load, dump
-        yaml_installed = True
-    except:
-        pass
-
-# check yaml package for config file
-boto_installed = False
-if "boto3" in packages:
-    try:
-        from boto3 import session
-        boto_installed = True
-    except:
-        pass
-
+from prettytable import PrettyTable
+from yaml import load, dump
+from boto3 import session
 
 # global vars
 conf_file_name = '.ec2-ninja.yaml'
@@ -420,50 +416,42 @@ options, _ = parser.parse_args()
 
 # check config file
 conf = None
-if path.isfile(conf_file_path):
-    if not yaml_installed:
-        print_main_message("Warning - found %s file, but the PyYAML package is not installed.\n" \
-              "you must run 'pip install pyyaml' in order to use this file!" % conf_file_name)
-    else:
+try:
+    with open(conf_file_path, 'r') as f:
+        conf = load(f)
+except Exception as e:
+    error_and_exit("Failed to load the conf file: %s\nerror: %s" % (conf_file_path, e.message))
+# get data from config file
+if conf is not None:
+    # set default user
+    if 'default_user' in conf and options.user is None:
+        options.user = conf['default_user']
+    # set ip type
+    if 'default_ip_type' in conf and options.iptype is None:
+        if conf['default_ip_type'] in ['lan', 'wan']:
+            options.iptype = conf['default_ip_type']
+        else:
+            print "Warning - found invalid default_ip_type in config, setting to lan"
+            options.iptype = 'lan'
+    # ignore cache
+    if 'ignore_cache' in conf and not options.use_cache:
+        if type(conf['ignore_cache']) == BooleanType and conf['ignore_cache']:
+            options.bust_cache = True
+    # get multi region config
+    if 'multi_region' in conf and not options.region:
+        options.region = conf['multi_region'][options.profile]
+    if 'batch_size' in conf and not options.batch:
+        if isinstance(conf['batch_size'], int):
+            options.batch = conf['batch_size']
+        else:
+            print "Warning - found invalid batch_size in config, setting to default"
+            options.batch = command_batch_size
+    if 'bastion_hosts' in conf:
         try:
-            with open(conf_file_path, 'r') as f:
-                conf = load(f)
+            for key, val in conf['bastion_hosts'].iteritems():
+                bastion_conf[key] = val
         except Exception as e:
-            error_and_exit("Failed to load the conf file: %s\nerror: %s" % (conf_file_path, e.message))
-        # get data from config file
-        if conf is not None:
-            # set default user
-            if 'default_user' in conf and options.user is None:
-                options.user = conf['default_user']
-            # set ip type
-            if 'default_ip_type' in conf and options.iptype is None:
-                if conf['default_ip_type'] in ['lan', 'wan']:
-                    options.iptype = conf['default_ip_type']
-                else:
-                    print "Warning - found invalid default_ip_type in config, setting to lan"
-                    options.iptype = 'lan'
-            # ignore cache
-            if 'ignore_cache' in conf and not options.use_cache:
-                if type(conf['ignore_cache']) == BooleanType and conf['ignore_cache']:
-                    options.bust_cache = True
-            # get multi region config
-            if 'multi_region' in conf and not options.region:
-                options.region = conf['multi_region'][options.profile]
-            if 'batch_size' in conf and not options.batch:
-                if isinstance(conf['batch_size'], int):
-                    options.batch = conf['batch_size']
-                else:
-                    print "Warning - found invalid batch_size in config, setting to default"
-                    options.batch = command_batch_size
-            if 'bastion_hosts' in conf:
-                try:
-                    if not boto_installed:
-                        error_and_exit("You must install boto3 in order to use this feature\n"
-                                       "Please run 'pip install boto3'")
-                    for key, val in conf['bastion_hosts'].iteritems():
-                        bastion_conf[key] = val
-                except Exception as e:
-                    error_and_exit("while loading bation data from conf file!\nError message: %s" % e.message)
+            error_and_exit("while loading bastion data from conf file!\nError message: %s" % e.message)
 
 # set default values
 if not options.region:
@@ -646,9 +634,6 @@ if options.split is not None:
     if "Darwin" not in platform():
         error_and_exit("This feature is for mac OS only!")
     check_brew_installation()
-    if not yaml_installed:
-        error_and_exit("You must install the PyYAML package in order to use this feature!\n"
-                       "Please run 'pip install pyyaml' and try again.\n")
     itermocil = find_executable('itermocil')
     if itermocil is None:
         error_and_exit("You must install itermocil in order to use this feature\n"
