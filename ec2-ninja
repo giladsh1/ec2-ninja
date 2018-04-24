@@ -17,6 +17,13 @@ from distutils.spawn import find_executable
 from types import BooleanType
 from commands import getstatusoutput, getoutput
 from pkg_resources import require, DistributionNotFound
+from signal import signal, SIGINT
+
+
+# This function handles SIGINT interrupt
+def sigint_interrupt(signum, frame):
+    print 'Caught keyboard interrupt - exiting\n'
+    exit()
 
 
 # This function changes the color of the prompt
@@ -338,6 +345,9 @@ def fetch_from_aws(aws_region):
                                        aws_region,
                                        extract_data_or_return_na(instance, 'InstanceType'),
                                        extract_data_or_return_na(instance, 'ImageId')])
+
+# catch SIGINT
+signal(SIGINT, sigint_interrupt)
 
 # validate pip and installed packages
 pip_version = getstatusoutput('pip -V')
